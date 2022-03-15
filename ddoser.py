@@ -11,7 +11,7 @@ import os
 from collections import defaultdict
 from itertools import cycle
 from random import randint
-from typing import Iterable, List, Tuple, Dict
+from typing import Iterable, List, Tuple, Dict, Optional
 import urllib.parse as urlparse
 from urllib.parse import urlencode
 
@@ -159,25 +159,50 @@ async def amain(
             )
     await asyncio.gather(*coroutines)
 
+def normalize_url(url: str) -> Optional[str]:
+    url = url.strip()
+
+    if url.startswith("# ") or url == "":
+        return None
+
+    return url.split(" #")[0].strip()
 
 def load_targets(target_urls_files: Tuple[str]) -> List[str]:
     target_urls = []
     for target_urls_file in target_urls_files:
         if os.path.isfile(target_urls_file):
             with open(target_urls_file) as f:
-                target_urls.extend(line.strip() for line in f)
+                for line in f:
+                    url = normalize_url(line)
+                    if url is not None:
+                        target_urls.append(url)
         else:
             try:
-                res = requests.get(target_urls_file)
-                target_urls.extend(line.strip() for line in res.text.splitlines())
+                import http.client as http_client
+                http_client.HTTPConnection.debuglevel = 1
+                res = requests.get(target_urls_file, verify=False)
+                for line in res.text.splitlines():
+                    url = normalize_url(line)
+                    if url is not None:
+                        target_urls.append(url)
             except:
                 pass
     logging.info('Loaded %s targets to ddos', len(target_urls))
     return target_urls
 
 
+def build_targets(target_urls: Tuple[str], target_urls_files: Tuple[str]) -> List[str]:
+    normalized_urls = load_targets(target_urls_files)
+    for url in target_urls:
+        normalized_url = normalize_url(url)
+        if normalized_url is not None:
+            normalized_urls.append(normalized_url)
+
+    return list(set(normalized_urls))
+
+
 def process(
-        target_url: Tuple[str], target_urls_file: Tuple[str], proxy_url: str, proxy_file: str,
+        target_urls: Tuple[str], target_urls_files: Tuple[str], proxy_url: str, proxy_file: str,
         concurrency: int, count: int, timeout: int, with_random_get_param: bool,
         user_agent: str, verbose: bool, ignore_response: bool, log_to_stdout: bool, random_xff_ip: bool,
         custom_headers: Dict[str, str], stop_attack: int, shuffle_proxy: bool, proxy_custom_format: str,
@@ -187,8 +212,7 @@ def process(
     uvloop.install()
     set_limits()
     proxies = load_proxies(proxy_file, proxy_url, shuffle=shuffle_proxy, custom_format=proxy_custom_format)
-    targets = load_targets(target_urls_file)
-    targets.extend(target_url)
+    targets = build_targets(target_urls, target_urls_files)
     ua = UserAgent(fallback = UA_FALLBACK)
     loop = asyncio.get_event_loop()
     loop.run_until_complete(
