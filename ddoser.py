@@ -178,8 +178,6 @@ def load_targets(target_urls_files: Tuple[str]) -> List[str]:
                         target_urls.append(url)
         else:
             try:
-                import http.client as http_client
-                http_client.HTTPConnection.debuglevel = 1
                 res = requests.get(target_urls_file, verify=False)
                 for line in res.text.splitlines():
                     url = normalize_url(line)
