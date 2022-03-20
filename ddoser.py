@@ -58,6 +58,11 @@ class Settings(NamedTuple):
     proxy_custom_format: str
     stop_attack_on_forbidden: bool
     reset_errors_on_success: bool
+    print_stats: int
+
+
+class WG:
+    WORKERS: int = 0
 
 
 async def make_request(
@@ -198,11 +203,12 @@ async def ddos(
             headers,
             settings,
         )
-        log_stats()
+    WG.WORKERS -= 1
 
 
-def log_stats():
-    if sum(STATS.values()) % 10000 == 0:
+async def log_stats(print_stats_every: int):
+    while print_stats_every > 0 and WG.WORKERS > 0:
+        await asyncio.sleep(print_stats_every)
         for target, statuses in URL_STATUS_STATS.items():
             logging.critical(json.dumps({"target": target, **statuses}))
 
@@ -218,6 +224,10 @@ async def amain(
     for target in targets:
         for _ in range(settings.concurrency):
             coroutines.append(ddos(target, proxy_iterator, ua, settings))
+            WG.WORKERS += 1
+
+    coroutines.append(log_stats(settings.print_stats))
+
     await asyncio.gather(*coroutines)
 
 
@@ -362,6 +372,13 @@ def merge_headers(custom_headers: str, header: List[Tuple[str, str]]) -> Dict[st
     is_flag=True,
     default=False,
 )
+@click.option(
+    "--print-stats",
+    help="Print stats every X seconds, if 0 do not print",
+    type=int,
+    default=30,
+    show_default=True,
+)
 def main(
     target_url: List[str],
     target_urls_file: str,
@@ -384,6 +401,7 @@ def main(
     proxy_custom_format: str,
     stop_attack_on_forbidden: bool,
     reset_errors_on_success: bool,
+    print_stats: int,
 ):
     config_logger(verbose, log_to_stdout)
     if not target_urls_file and not target_url:
@@ -409,6 +427,7 @@ def main(
         proxy_custom_format=proxy_custom_format,
         stop_attack_on_forbidden=stop_attack_on_forbidden,
         reset_errors_on_success=reset_errors_on_success,
+        print_stats=print_stats,
     )
     while True:
         proc = multiprocessing.Process(target=process, args=(settings,))
