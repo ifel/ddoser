@@ -4,6 +4,7 @@ import json
 import multiprocessing
 import re
 from http import HTTPStatus
+import time
 
 import uvloop
 import logging
@@ -31,6 +32,7 @@ from fake_useragent import UserAgent
 STATS = defaultdict(int)
 URL_ERRORS_COUNT = defaultdict(int)
 URL_STATUS_STATS = defaultdict(lambda: defaultdict(int))
+URL_SUCCESS_REQUESTS = defaultdict(int)
 DDOS_GUARD_COOKIE_CACHE = TTLCache(
     maxsize=100, ttl=timedelta(hours=1), timer=datetime.now
 )  # 3h is min __ddg5 lifetime, __ddg2 lives 1 year
@@ -207,10 +209,25 @@ async def ddos(
 
 
 async def log_stats(print_stats_every: int):
+    start_time = time.time()
+    last_print = start_time
     while print_stats_every > 0 and WG.WORKERS > 0:
         await asyncio.sleep(print_stats_every)
         for target, statuses in URL_STATUS_STATS.items():
             logging.critical(json.dumps({"target": target, **statuses}))
+        now = time.time()
+        succeeded = STATS["success"]
+        delta = succeeded - STATS["success_prev"]
+        logging.critical(
+            "Workers: %d; Requests succeeded: %d (%.2f rps); since last log: %d (%.2f rps)",
+            WG.WORKERS,
+            succeeded,
+            succeeded / (now - start_time),
+            delta,
+            delta / (now - last_print),
+        )
+        last_print = now
+        STATS["success_prev"] = succeeded
 
 
 async def amain(
@@ -287,6 +304,8 @@ def process(settings: Settings):
     loop = asyncio.get_event_loop()
     loop.run_until_complete(amain(targets, proxies, ua, settings))
     for key, value in STATS.items():
+        if key == "success_prev":
+            continue
         if key != "success":
             logging.info("%s: %s", key, value)
     logging.info("success: %s", STATS["success"])
