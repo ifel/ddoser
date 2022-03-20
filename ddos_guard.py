@@ -10,9 +10,11 @@ from http.cookies import SimpleCookie
 from aiohttp import ClientSession
 
 
-async def bypass(url: str, cookies=None, *, session: ClientSession, ignore_response: bool):
+async def bypass(
+    url: str, cookies=None, *, session: ClientSession, ignore_response: bool
+):
     cookies = cookies or {}
-    logging.debug('[ddos_guard.bypass] Started for %s', url)
+    logging.debug("[ddos_guard.bypass] Started for %s", url)
 
     headers_1 = {
         "Accept": "text/html",
@@ -33,7 +35,9 @@ async def bypass(url: str, cookies=None, *, session: ClientSession, ignore_respo
             cookies.update(response_1.cookies)
         i += 1
 
-    logging.debug("[ddos_guard.bypass] Parsed cookies from %r: %r", url, cookies or None)
+    logging.debug(
+        "[ddos_guard.bypass] Parsed cookies from %r: %r", url, cookies or None
+    )
 
     headers_2 = {
         "Accept": "*/*",
@@ -42,9 +46,11 @@ async def bypass(url: str, cookies=None, *, session: ClientSession, ignore_respo
         "Referer": url,
         "Sec-Fetch-Dest": "script",
         "Sec-Fetch-Mode": "no-cors",
-        "Sec-Fetch-Site": "cross-site"
+        "Sec-Fetch-Site": "cross-site",
     }
-    async with session.get("https://check.ddos-guard.net/check.js", headers=headers_2) as response_2:
+    async with session.get(
+        "https://check.ddos-guard.net/check.js", headers=headers_2
+    ) as response_2:
         cookies_2 = response_2.cookies
 
     logging.debug("[ddos_guard.bypass] Parsed cookies from check.js: %r", cookies_2)
@@ -57,14 +63,28 @@ async def bypass(url: str, cookies=None, *, session: ClientSession, ignore_respo
     ddos_guard_cookies.update(cookies)
     ddos_guard_cookies.update(cookies_2)
 
-    logging.debug("[ddos_guard.bypass] Retrieved final cookies for %r: %r", url, ddos_guard_cookies)
+    logging.debug(
+        "[ddos_guard.bypass] Retrieved final cookies for %r: %r",
+        url,
+        ddos_guard_cookies,
+    )
 
-    async with session.get(url, cookies=ddos_guard_cookies, headers=headers_1) as response_3:
+    async with session.get(
+        url, cookies=ddos_guard_cookies, headers=headers_1
+    ) as response_3:
         if response_3.status == HTTPStatus.OK:
-            logging.info("[ddos_guard.bypass] Protection was bypassed for %r: %r", url, ddos_guard_cookies)
+            logging.info(
+                "[ddos_guard.bypass] Protection was bypassed for %r: %r",
+                url,
+                ddos_guard_cookies,
+            )
             if not ignore_response:
                 await response_3.text()
         if response_3.status != HTTPStatus.OK:
-            logging.warning("[ddos_guard.bypass] Protection was NOT bypassed for %r: %r", url, ddos_guard_cookies)
+            logging.warning(
+                "[ddos_guard.bypass] Protection was NOT bypassed for %r: %r",
+                url,
+                ddos_guard_cookies,
+            )
 
     return ddos_guard_cookies, response_3
