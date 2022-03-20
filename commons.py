@@ -39,7 +39,7 @@ def get_log_level(verbose: int):
     return levels[verbose] if verbose < len(levels) else levels[-1]
 
 
-def config_logger(verbose, log_to_stdout):
+def config_logger(verbose:bool, log_to_stdout: bool):
     kwargs = {}
     if not log_to_stdout:
         kwargs['filename'] = os.path.abspath(sys.argv[0]).split('.')[0] + '.log'
